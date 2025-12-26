@@ -193,19 +193,7 @@ error_color    = (1.0, 0.0, 0.0)   # Red
 - Large assemblies may increase runtime
 - Requires valid solid geometry
 
----
-
-## Suggested Repository Layout
-
-```
-FreeCAD-PCB-Enclosure-Clearance-Detection/
-├─ macro/
-│  └─ pcb_enclosure_clearance.FCMacro
-├─ images/
-│  ├─ no_collision.png
-│  └─ collision.png
-└─ README.md
-```
+--
 
 ## Final Remarks
 
