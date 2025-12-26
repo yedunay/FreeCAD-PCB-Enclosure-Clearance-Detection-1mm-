@@ -1,0 +1,223 @@
+import FreeCAD
+import FreeCADGui
+import Part
+
+limit_mm = 1.0  # 1mm clearance
+
+pcb_base_color = (0.0, 1.0, 0.0)   # Green
+box_base_color = (0.7, 0.7, 0.7)   # Grey
+error_color    = (1.0, 0.0, 0.0)   # Red
+
+def get_global_shape(obj):    # Build a shape in REAL coordinates (fixes placement issues). // Most important fix
+    try:
+        # If this is a Body, Tip is usually the shown result
+        if hasattr(obj, "Tip") and obj.Tip is not None:
+            shape = obj.Tip.Shape.copy()
+        else:
+            shape = obj.Shape.copy()
+
+        # Apply global placement
+        try:
+            shape.Placement = obj.getGlobalPlacement()
+        except:
+            shape.Placement = obj.Placement
+
+        return shape
+    except Exception as e:  ## ai exception
+        FreeCAD.Console.PrintError(f"Shape error ({obj.Name}): {e}\n")
+        return None
+
+def has_faces(obj):
+    try:
+        return hasattr(obj, "Shape") and obj.Shape and len(obj.Shape.Faces) > 0
+    except:
+        return False
+
+def collect_paint_targets(root):     # Collect all solid objects under PCB container (Board, U1, J2, ...).
+    targets = []
+
+    def walk(o):
+        # Walk groups/containers
+        if hasattr(o, "Group") and o.Group:
+            for ch in o.Group:
+                walk(ch)
+            return
+
+        # Use Tip if exists, otherwise itself
+        v = o
+        try:
+            if hasattr(o, "Tip") and o.Tip is not None:
+                v = o.Tip
+        except:
+            pass
+
+        if has_faces(v):
+            targets.append(v)
+
+    walk(root)
+
+    if not targets and has_faces(root):   # Fallback: if PCB is a single solid object
+        targets = [root]
+
+    # Deduplicate
+    uniq = []
+    seen = set()
+    for t in targets:
+        if t.Name not in seen:
+            uniq.append(t)
+            seen.add(t.Name)
+    return uniq
+
+def set_face_colors(obj, base_rgb, red_face_indices_1based):
+    try:
+        n = len(obj.Shape.Faces)
+        colors = []
+        for i in range(n):
+            face_idx = i + 1
+            colors.append(error_color if face_idx in red_face_indices_1based else base_rgb)
+
+        obj.ViewObject.DiffuseColor = colors
+    except Exception as e: # ai exception 
+        FreeCAD.Console.PrintWarning(f"Coloring failed ({obj.Name}): {e}\n")
+
+def bbox_close(bbA, bbB, tol):
+    if (bbB.XMin > bbA.XMax + tol) or (bbB.XMax < bbA.XMin - tol):
+        return False
+    if (bbB.YMin > bbA.YMax + tol) or (bbB.YMax < bbA.YMin - tol):
+        return False
+    if (bbB.ZMin > bbA.ZMax + tol) or (bbB.ZMax < bbA.ZMin - tol):
+        return False
+    return True
+
+def red_faces_against_shape(global_shape_A, objA_local_faces_count, shapeB_global, tol):
+#Return 1-based face indices where distance(faceA, shapeB) < tol. Uses global_shape_A faces for distance, but indices match local face order.
+    red_set = set()
+    bbB = shapeB_global.BoundBox
+
+    for ai, faceA in enumerate(global_shape_A.Faces):
+        if not bbox_close(faceA.BoundBox, bbB, tol):
+            continue
+        try:
+            d = faceA.distToShape(shapeB_global)[0]
+        except:
+            continue
+        if d < tol:
+            red_set.add(ai + 1)
+
+    # Safety: if something weird happens with face counts
+    red_set = {idx for idx in red_set if 1 <= idx <= objA_local_faces_count}
+    return red_set
+
+def main():
+    doc = FreeCAD.ActiveDocument
+
+    pcb_obj = doc.getObject("PCB")
+    body_obj = doc.getObject("Body")
+    thick_obj = doc.getObject("Thickness")  # THIS is usually the final enclosure shape // special for this project
+
+    if pcb_obj is None:
+        FreeCAD.Console.PrintError("ERROR: 'PCB' not found!\n") # ai comp.
+        return
+
+    # Prefer Thickness if it exists, otherwise fallback to Body
+    box_obj = thick_obj if thick_obj is not None else body_obj
+    if box_obj is None:
+        FreeCAD.Console.PrintError("ERROR: Neither 'Thickness' nor 'Body' found!\n") # ai comp.
+        return
+
+    FreeCAD.Console.PrintMessage(f"Analysis started: PCB vs Box\n")
+
+    # Global shapes (world coordinates)
+    pcb_global_for_count = get_global_shape(pcb_obj)
+
+    # IMPORTANT FIX: Collect ALL enclosure solids under Body (Thickness + Pad001(top lid) + ...)
+    # If you only use Thickness/Tip, the top cap can be missing from the check.
+    box_targets = collect_paint_targets(body_obj if body_obj is not None else box_obj)
+
+    box_global_shapes = []
+    for b in box_targets:
+        bg = get_global_shape(b)
+        if bg is not None:
+            box_global_shapes.append(bg)
+
+    if pcb_global_for_count is None or not box_global_shapes:
+        return
+
+    # Build one "box compound" in global coords (now includes the top lid too)
+    box_compound_global = Part.makeCompound(box_global_shapes)
+
+    # Paint reset (box grey, PCB children green)
+    try:
+        box_obj.ViewObject.Transparency = 60
+    except:
+        pass
+
+    pcb_targets = collect_paint_targets(pcb_obj)
+
+    # Reset colors
+    for b in box_targets:
+        set_face_colors(b, box_base_color, set())
+
+    for t in pcb_targets:
+        set_face_colors(t, pcb_base_color, set())
+
+    error_face_count = 0
+    for face in pcb_global_for_count.Faces:
+        try:
+            dist = face.distToShape(box_compound_global)[0]
+            if dist < limit_mm:
+                error_face_count += 1
+        except:
+            pass
+
+    # PCB -> Box: per child object
+    pcb_global_shapes = []
+    for t in pcb_targets:
+        tg = get_global_shape(t)
+        if tg is not None:
+            pcb_global_shapes.append(tg)
+
+            red_faces = red_faces_against_shape(
+                global_shape_A=tg,
+                objA_local_faces_count=len(t.Shape.Faces),
+                shapeB_global=box_compound_global,
+                tol=limit_mm
+            )
+            set_face_colors(t, pcb_base_color, red_faces)
+
+    # Box -> PCB: use compound of global PCB solids
+    if pcb_global_shapes and box_targets:
+        pcb_compound_global = Part.makeCompound(pcb_global_shapes)
+
+        # Paint each enclosure solid separately (so Pad001 / top lid gets painted too)
+        for b in box_targets:
+            bg = get_global_shape(b)
+            if bg is None:
+                continue
+
+            box_red = red_faces_against_shape(
+                global_shape_A=bg,
+                objA_local_faces_count=len(b.Shape.Faces),
+                shapeB_global=pcb_compound_global,
+                tol=limit_mm
+            )
+            set_face_colors(b, box_base_color, box_red)
+
+    FreeCADGui.updateGui()
+
+    if error_face_count > 0:
+        FreeCAD.Console.PrintWarning(
+            f"RESULT: {error_face_count} PCB faces are closer than 1 mm. (Red areas)\n"
+        )
+        from PySide import QtGui
+        QtGui.QMessageBox.warning(
+            None, "WARNING", "Clearance < 1 mm detected!\nCheck red areas."
+        )
+    else:
+        FreeCAD.Console.PrintMessage("RESULT: OK. No clearance below 1 mm.\n")
+        from PySide import QtGui
+        QtGui.QMessageBox.information(
+            None, "SUCCESS", "Test passed!\nAll clearances are >= 1 mm."
+        )
+
+main()
