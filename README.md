@@ -207,16 +207,6 @@ FreeCAD-PCB-Enclosure-Clearance-Detection/
 └─ README.md
 ```
 
----
-
-## License
-
-MIT License
-
-Free to use, modify, and distribute.
-
----
-
 ## Final Remarks
 
 This macro is intentionally **simple, deterministic, and visual**.
