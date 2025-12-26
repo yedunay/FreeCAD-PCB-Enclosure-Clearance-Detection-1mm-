@@ -202,7 +202,7 @@ error_color    = (1.0, 0.0, 0.0)   # Red
 - Large assemblies may increase runtime
 - Requires valid solid geometry
 
---
+---
 
 ## Final Remarks
 
