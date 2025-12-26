@@ -1,3 +1,12 @@
+```
+████████████████████████████████████████████████████████████████████████████████
+██                                                                            ██
+██                            Created by YED                                  ██
+██                    FreeCAD Clearance Detection (1mm)                       ██
+██                            PCB–Enclosure                                   ██
+██                                                                            ██
+██████████████████████████████ Licensed by YED █████████████████████████████████
+```
 
 # FreeCAD PCB–Enclosure Clearance Detection (1 mm)
 
